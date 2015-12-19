@@ -1,0 +1,4 @@
+.hg/*
+.hgignore
+*.sublime-workspace
+*.LNK

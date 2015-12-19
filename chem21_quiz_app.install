@@ -1,0 +1,14 @@
+<?php
+
+/**
+ * @file
+ * Defines module install  logic.
+ */
+
+function chem21_quiz_app_install() {
+  watchdog("C21 Quiz App","Altering chem21's module weight");
+  db_update('system')
+    ->fields(array('weight' => 1000))
+    ->condition('name', 'chem21_quiz_app')
+    ->execute();
+}

@@ -1,0 +1,749 @@
+<?php
+
+/**
+ * Theme a progress indicator for use during a quiz.
+ *
+ * @param $question_number
+ *  The position of the current question in the sessions' array.
+ * @param $num_of_question
+ *  The number of questions for this quiz as returned by quiz_get_number_of_questions().
+ * @return
+ *  Themed html.
+ *
+ * @ingroup themeable
+ */
+function theme_chem21_quiz_app_quiz_progress($vars) {
+  $ques = $vars['question'];
+  $ques_node = node_load($ques->nid);
+  $quiz = $vars['quiz'];
+  // TODO Number of parameters in this theme funcion does not match number of parameters found in hook_theme.
+  // Determine the percentage finished (not used, but left here for other implementations).
+  //$progress = ($question_number*100)/$num_of_question;
+  $output  = '';
+  if(node_access('update',$ques)) {
+    $output.='<ul class="tabs primary"><li><a href="/node/'.$ques->nid.'/edit">Edit</a></li></ul>';
+  }
+  $output .= '<div id="quiz_progress">';
+  $output .= '<h2>'.$ques->title.'</h2>';
+  $output .= t('(Step <span id="quiz-question-number">!x</span> of <span id="quiz-num-questions">@y</span>)', array('!x' => $ques->number, '@y' => $quiz->get_number_of_questions()));
+  $output .="</div>";
+  return $output;
+}
+
+/**
+ * @file
+ * Module file. Defines module hooks.
+ */
+function chem21_quiz_app_theme($existing,$type,$theme,$path) {
+  return array(
+    'chem21_quiz_app_quiz_progress' => array(
+      'variables' => array('quiz'=>NULL,'question'=>NULL),
+      #'file' => 'chem21_quiz_app.module',
+    ),
+    'chem21_quiz_app_question_tree' => array(
+      'variables' => array('courses'=>NULL,'type'=>'question'),
+    ),
+  );
+}
+
+function chem21_quiz_app_quiz_take($node) {
+  $quiz = new CHEM21Quiz($node);
+  //drupal_goto("node/".$quiz->nid."/take/".$quiz->get_current_question()->nid);
+  _opigno_quiz_app_enable_fullscreen($node);
+  if (isset($node->rendered_content)) {
+    return $node->rendered_content;
+  }
+  
+  return $quiz->render_current_question();
+}
+
+function chem21_quiz_app_menu_alter(&$items) {
+  $items['node/%node/take']['page callback'] = 'chem21_quiz_app_quiz_take';
+  return $items;
+}
+
+function chem21_quiz_app_quiz_question_access($node, $question_node) {
+  if ($node->type != 'quiz') {
+    return FALSE;
+  }
+  return node_access('view', $node) && user_access('access quiz') && quiz_availability($node) === TRUE;
+}
+
+function chem21_quiz_app_menu() {
+  $items['node/%node/take/%node'] = array(
+    'page callback' => 'chem21_quiz_app_question_in_lesson',
+    'page arguments' => array(1,3),
+    'access arguments' => array(1),
+    'access callback' => 'og_quiz_take_access',   
+    'type' => MENU_CALLBACK
+  );
+  return $items;
+}
+
+function chem21_quiz_app_quiz_load($nid) {
+  $quiz = new CHEM21Quiz(node_load($nid));
+  return $quiz;
+}
+
+function chem21_quiz_app_question_in_lesson($quiz_node,$question_node) {
+  _opigno_quiz_app_enable_fullscreen($quiz_node);
+  if (isset($node->rendered_content)) {
+    return $node->rendered_content;
+  }
+  $quiz = new CHEM21Quiz($quiz_node);
+  if(!isset($_POST['op'])) {
+    $quiz->jump_to_question($question_node);
+
+  } 
+  return $quiz->render_current_question();
+}
+
+function chem21_quiz_app_preprocess_node(&$vars) {
+  $node = $vars['node'];
+  watchdog("C21 APp","Preprocessing node");
+  if(CHEM21Quiz::is_question_node($node) && !$_POST['op']) {
+    $quiz_nids = CHEM21Quiz::get_quizzes_for_question_vid($node->vid);
+    if(empty($quiz_nids)) {
+      return TRUE;
+    }
+    $quiz_nid = reset($quiz_nids);
+    $quiz = new CHEM21Quiz(node_load($quiz_nid));
+    if($quiz->jump_to_question($node)) {
+      //drupal_goto($path='node/'.$quiz_nid.'/take/'.$node->nid);
+    }
+  }
+}
+
+function chem21_quiz_app_course_question_tree($course_nid, $type) {
+  Global $user;
+  $account=$user;
+  $uid = $account->uid;
+  $lessons = opigno_quiz_app_course_lessons($course_nid);
+  $lessons_ = array();
+  foreach ($lessons as $course_nid => $quizzes) {
+    foreach ($quizzes as $quiz_id => $quiz_arr) {
+      $quiz = new CHEM21Quiz(NULL,$quiz_id,$quiz_arr['vid']);
+      $score = quiz_get_score_data(array($quiz_id),$uid);
+      $quiz_questions = $quiz->question_list();
+      $lessons_ [$course_nid][$quiz->vid] = $score[$quiz->vid];
+      $lessons_ [$course_nid][$quiz->vid]->questions = $quiz_questions;
+    }
+  }
+  $out = array('courses'=>$lessons_);
+  return theme('chem21_quiz_app_question_tree',array('courses'=>$lessons_,'type'=>$type));
+}
+
+function chem21_quiz_app_preprocess_page(&$vars) {
+  
+  $group = og_context('node');
+  if (!empty($group['gid'])) {
+    $node = node_load($group['gid']);
+    if ($node->type == "course") {
+        if(arg(2)=="take" || arg(2)=="question") {
+          $type="question";
+          // alter $vars['tabs']['#primary']
+        } else {
+          $type="quiz";
+        }
+      $vars['group_state']['course'][$node->nid]['quiz'] = chem21_quiz_app_course_question_tree($group['gid'],$type);
+    }
+    if ($node->type == "class") {
+      if (isset($node->opigno_class_courses[LANGUAGE_NONE])) {
+        foreach ($node->opigno_class_courses[LANGUAGE_NONE] as $cindex => $course) {
+          $vars['group_state']['course'][$course['target_id']]['quiz'] = chem21_quiz_app_course_question_tree($course['target_id'],"class");
+        }
+      }
+    }
+  }
+}
+
+function chem21_quiz_app_module_implements_alter(&$implementations, $hook) {
+  if ($hook == 'preprocess_page') {
+    // Move chem21_quiz_app_preprocess_page() to the end of the list. module_implements()
+    // iterates through $implementations with a foreach loop which PHP iterates
+    // in the order that the items were added, so to move an item to the end of
+    // the array, we remove it and then add it.
+    $group = $implementations ['chem21_quiz_app'];
+    unset($implementations ['chem21_quiz_app']);
+    $implementations ['chem21_quiz_app'] = $group;
+  }
+}
+
+/******************* theme functions ********************************/
+
+function _theme_chem21_question_items($questions, $node, $current_question=NULL) {
+  $items = array();
+  $quiz = new CHEM21Quiz($node);
+  $qnum=1;
+  foreach ($questions as $question) {
+    if($current_question===NULL || $current_question->number != $question->number) {
+      $items[] = array('data'=>l($question->title,'/node/'.$quiz->nid.'/take/'.$question->nid));
+    } else {
+      $items[] = $question->title;
+    }
+    $qnum++;
+  }
+  return $items;
+}
+
+function _theme_chem21_lesson_items($lessons, $type) {
+  $items = array();
+  
+  foreach ($lessons as $quiz_vid => $lesson ) {
+    $quiz = new CHEM21Quiz($lesson);
+    $is_current = $quiz->is_current();
+    $data = $lesson->title;
+    if(!$quiz->is_current() || $type == "question") {
+      $data = l($data, '/node/'.$lesson->nid);
+    }
+    if($type=="question" && $is_current) {
+      $current_question = $quiz->get_current_question();
+    } else {
+      $current_question = NULL;
+    }
+    $items[] = array('data'=>$data, 'children'=>_theme_chem21_question_items($lesson->questions, $lesson, $current_question));
+  }
+  return $items;
+}
+
+function theme_chem21_quiz_app_question_tree($vars) {
+  $items = array();
+  foreach ($vars['courses'] as $course_nid => $course) {
+    $items += _theme_chem21_lesson_items($course, $vars['type']);
+  }
+  return theme('item_list',array('items'=>$items, 'type'=>'ol'));
+}
+
+
+/******************* API resources **********************************/
+
+/**
+ * Implements of hook_services_resources().
+ */
+function chem21_quiz_app_services_resources() {
+  $api = array(
+    'course' => array(
+      'operations' => array(
+        'retrieve' => array(
+          'help' => 'Retrieves a lesson tree',
+          'callback' => '_chem21_quiz_app_lesson_tree_retrieve',
+          'access callback' => 'user_access',
+          'access arguments' => array('access content'),
+          'access arguments append' => FALSE,
+          'args' => array(
+            array(
+              'name' => 'cId',
+              'type' => 'int',
+              'description' => 'Course ID',
+              'source' => array('path'=>0),
+              'optional' => FALSE,
+              'default' => '0',
+            ),
+          ),
+        ),
+        'create' => array(
+          'help' => 'Creates a new course',
+          'callback' => '_chem21_quiz_app_course_create',
+          'access callback' => 'user_access',
+          'access arguments' => array('access content'),
+          'access arguments append' => FALSE,
+          'args' => array(
+            array(
+              'name' => 'data',
+              'type' => 'struct',
+              'description' => 'Course object',
+              'source' => 'data',
+              'optional' => FALSE
+            )
+          ),
+        ),
+        'update' => array(
+          'help' => 'Update a course',
+          'callback' => '_chem21_quiz_app_course_update',
+          'access callback' => 'user_access',
+          'access arguments' => array('access content'),
+          'access arguments append' => FALSE,
+          'args' => array(
+            array(
+              'name' => 'cId',
+              'type' => 'int',
+              'description' => 'Course ID',
+              'source' => array('path'=>'0'),
+              'optional' => FALSE,
+            ),
+            array(
+              'name' => 'data',
+              'type' => 'struct',
+              'description' => 'Course object',
+              'source' => 'data',
+              'optional' => FALSE
+            )
+          ),
+        ),
+      ),
+      'actions' => array(
+        'reorder' => array(
+          'help' => 'Reorder the lessons in a course',
+          'callback' => '_chem21_quiz_app_course_reorder_lessons',
+          'access callback' => 'user_access',
+          'access arguments' => array('edit content'),
+          'access arguments append' => FALSE,
+          'args' => array(
+            array(
+              'name' => 'cId',
+              'type' => 'int',
+              'description' => 'Course ID',
+              'source' => array('path'=>'0'),
+              'optional' => FALSE,
+            ),
+            array(
+              'name' => 'data',
+              'type' => 'struct',
+              'description' => 'New lesson weights',
+              'source' => 'data',
+              'optional' => FALSE
+            )
+          )
+        )
+      )
+    ),
+    'lesson' => array(
+      'operations' => array(
+        'retrieve' => array(
+          'help' => 'Retrieves a lesson',
+          'callback' => '_chem21_quiz_app_lesson_retrieve',
+          'access callback' => 'user_access',
+          'access arguments' => array('access content'),
+          'access arguments append' => FALSE,
+          'args' => array(
+            array(
+              'name' => 'lId',
+              'type' => 'int',
+              'description' => 'Lesson ID',
+              'source' => array('path'=>0),
+              'optional' => FALSE,
+              'default' => '0',
+            ),
+          ),
+        ),
+        'create' => array(
+          'help' => 'Creates a new lesson',
+          'callback' => '_chem21_quiz_app_lesson_create',
+          'access callback' => 'user_access',
+          'access arguments' => array('edit content'),
+          'access arguments append' => FALSE,
+          'args' => array(
+           array(
+              'name' => 'data',
+              'type' => 'struct',
+              'description' => 'Lesson object',
+              'source' => 'data',
+              'optional' => FALSE
+            )
+          ),
+        ),
+        'update' => array(
+          'help' => 'Update a lesson',
+          'callback' => '_chem21_quiz_app_lesson_update',
+          'access callback' => 'user_access',
+          'access arguments' => array('edit content'),
+          'access arguments append' => FALSE,
+          'args' => array(
+            array(
+              'name' => 'lId',
+              'type' => 'int',
+              'description' => 'Lesson ID',
+              'source' => array('path'=>'0'),
+              'optional' => FALSE,
+            ),
+            array(
+              'name' => 'data',
+              'type' => 'struct',
+              'description' => 'Lesson object',
+              'source' => 'data',
+              'optional' => FALSE
+            )
+          ),
+        ),
+      ),
+      'actions' => array(
+        'reorder' => array(
+          'help' => 'Reorder the questions in a lesson',
+          'callback' => '_chem21_quiz_app_lesson_reorder_questions',
+          'access callback' => 'user_access',
+          'access arguments' => array('edit content'),
+          'access arguments append' => FALSE,
+          'args' => array(
+            array(
+              'name' => 'lId',
+              'type' => 'int',
+              'description' => 'Lesson ID',
+              'source' => array('path'=>'0'),
+              'optional' => FALSE,
+            ),
+            array(
+              'name' => 'data',
+              'type' => 'struct',
+              'description' => 'New question weights',
+              'source' => 'data',
+              'optional' => FALSE
+            )
+          )
+        )
+      )
+    ),
+    'question' => array(
+      'operations' => array(
+        'retrieve' => array(
+          'help' => 'Retrieves a question',
+          'callback' => '_chem21_quiz_app_question_retrieve',
+          'access callback' => 'user_access',
+          'access arguments' => array('access content'),
+          'access arguments append' => FALSE,
+          'args' => array(
+            array(
+              'name' => 'qId',
+              'type' => 'int',
+              'description' => 'Course ID',
+              'source' => array('path'=>0),
+              'optional' => FALSE,
+              'default' => '0',
+            ),
+          ),
+        ),
+        'create' => array(
+          'help' => 'Creates a new question',
+          'callback' => '_chem21_quiz_app_question_create',
+          'access callback' => 'user_access',
+          'access arguments' => array('edit content'),
+          'access arguments append' => FALSE,
+          'args' => array(
+            array(
+              'name' => 'data',
+              'type' => 'struct',
+              'description' => 'Question object',
+              'source' => 'data',
+              'optional' => FALSE
+            )
+          ),
+        ),
+        'update' => array(
+          'help' => 'Update a question',
+          'callback' => '_chem21_quiz_app_question_update',
+          'access callback' => 'user_access',
+          'access arguments' => array('edit content'),
+          'access arguments append' => FALSE,
+          'args' => array(
+            array(
+              'name' => 'qId',
+              'type' => 'int',
+              'description' => 'Question ID',
+              'source' => array('path' => '0'),
+              'optional' => FALSE,
+            ),
+            array(
+              'name' => 'data',
+              'type' => 'struct',
+              'description' => 'Question object',
+              'source' => 'data',
+              'optional' => FALSE
+            )
+          ),
+        ),
+      ),
+    ),
+  );
+  return $api;
+} 
+
+
+function _chem21_array_filter_recursive($input) 
+{ 
+  foreach ($input as &$value) 
+  { 
+    if( is_array($value)) { 
+      if( !empty($value)) { 
+        $value = array_filter_recursive($value); 
+      } else {
+        $value = null;
+      }
+    }
+  }
+  return array_filter($input); 
+}
+
+
+function _chem21_quiz_app_h5p_video_path_alter($json_content, $path, $mime) {
+  $s = json_decode($json_content,true);
+  $vfiles = &$s['interactiveContent']['video']['files'];
+  $done = False;
+  foreach( $vfiles as $file ) {
+    if( $file['mime'] == $mime ) {
+      $file['path'] = $path;
+      $done = True;
+    }
+  }
+  if( !$done ) {
+    $vfiles[] = array( 'copyright'=> array('license'=>'U'), 'mime'=> $mime, 'path'=>$path );
+  }
+  return json_encode($s);
+}
+
+
+function _chem21_quiz_app_get_h5p_content_path($entity) {
+  return _h5p_get_h5p_path()."content/".h5p_get_content_id($entity)."/";
+}
+
+
+function _chem21_quiz_app_question_retrieve($lId) {
+  $question = entity_load_single('node', intval($lId));
+  $ewrapper = entity_metadata_wrapper('node', $question);
+  $question->intro = $ewrapper->body->value()['value'];
+  
+  return $question;
+}
+
+function _chem21_quiz_app_question_create($data) {
+  global $user;
+  $values = array(
+    'uid' => $user->uid,
+    'status' => 1,
+    'comment' => 0,
+    'promote' => 0,
+  );
+  if(isset($data['simple_fields']) && $data['simple_fields']) {
+    $values = array_merge($values, (array)$data['simple_fields']);
+  }
+  $entity = entity_create('node',$values);
+  $entity->uid = $user->uid;
+  if(!isset($data['title']) || !$data['title']) {
+    return services_error('Missing question attribute: title', 406);
+  }
+
+  $entity = _chem21_quiz_app_question_update_help($entity, $data);
+  return (object)array(
+        'id' => $entity->nid,
+        'uri' => services_resource_uri(array('question', $entity->nid)),
+      );
+}
+
+function _chem21_quiz_app_lesson_retrieve($lId) {
+  $question = entity_load_single('node', intval($lId));
+ # $ewrapper = entity_metadata_wrapper('node', $lesson);
+  #$question->intro = $ewrapper->body->value()['value'];
+  
+  return $question;
+}
+
+function _chem21_quiz_app_question_update($qId,$data) {
+  $entity = entity_load_single('node',intval($qId));
+  if(empty($entity)) {
+    return services_error("Question not found", 410);
+  }
+  $entity = _chem21_quiz_app_question_update_help($entity, $data);
+
+
+  return (object)array(
+        'id' => $entity->nid,
+        'uri' => services_resource_uri(array('question', $entity->nid)),
+        'data' => $data,
+      );
+}
+
+function _chem21_quiz_app_question_update_help($entity, $data )  {  
+  $ewrapper = entity_metadata_wrapper('node', $entity, array('bundle'=>$entity->type));
+
+  if( isset($data['file']) && $data['file']['type']=="video" ) {
+    $content_path = _chem21_quiz_app_get_h5p_content_path($entity);
+    $filename_abs=$content_path.$data['file']['filename'];
+    $savedfile=file_save_data(base64_decode($data['file']['data']), $filename_abs);
+  }
+
+  if(isset($data['intro'] )) {
+    $ewrapper->body->set(array('value' => $data['intro']));
+  }
+
+  if(isset($data['title'])) {
+    $ewrapper->title = $data['title'];
+    
+  }
+  try {
+    $ewrapper->save();
+  } catch (Exception $e) {
+    return services_error($entity->type." ".$e->getMessage(), 500);
+  }
+
+  return $entity;
+}
+
+function _chem21_quiz_app_lesson_tree_retrieve($cId) {
+  $lessons = opigno_quiz_app_course_lessons($cId);
+  $lessons_ = array();
+  foreach ($lessons as $lesson_nid => $quizzes) {
+    foreach ($quizzes as $quiz_id => $quiz_arr) {
+      $quiz = new CHEM21Quiz(NULL,$quiz_id,$quiz_arr['vid']);
+      $score = quiz_get_score_data(array($quiz_id),$uid);
+      $quiz_questions = $quiz->question_list();
+      $lesson = $score[$quiz->vid];
+      $lesson->questions = $quiz_questions;
+      $lessons_ [] = $lesson;
+    }
+  }
+  $course = entity_load_single('node', intval($cId));
+  $course->lessons = $lessons_;
+  return $course;
+}
+
+function _chem21_quiz_app_lesson_create($data) {
+  global $user;
+  $values = array(
+    'type' => 'quiz',
+    'uid' => $user->uid,
+    'status' => 1,
+    'comment' => 0,
+    'promote' => 0,
+  );
+  if(!isset($data['title']) || !$data['title']) {
+    return services_error('Missing question attribute: title', 400);
+  }
+  $entity = entity_create('node', $values);
+  $entity = _chem21_quiz_app_lesson_update_help($entity, $data);
+  return (object)array(
+      'id' => $entity->nid,
+      'uri' => services_resource_uri(array('lesson', $entity->nid)),
+    );
+}
+
+function _chem21_quiz_app_lesson_update($lId,$data) {
+  $entity = entity_load_single('node',$lId);
+  if(empty($entity)) {
+    return services_error("Lesson not found", 410);
+  }
+
+    $changes = _chem21_quiz_app_lesson_update_help($entity, $data);
+
+  return (object)array(
+    'id' => $entity->nid,
+    'uri' => services_resource_uri(array('lesson', $entity->nid)),
+    'changes' => $changes
+  );
+}
+
+function _chem21_quiz_app_lesson_reorder_questions($lId, $data) {
+  $lesson = new CHEM21Quiz($lId);
+  $changes = $lesson->reorder_questions($data['question_weights']);
+  return (object)array(
+    'id' => $lesson->nid,
+    'uri' => services_resource_uri(array('lesson', $lesson->nid)),
+    'changes' => $changes
+  );
+}
+
+function _chem21_quiz_app_ensure_children_in_parent($children_pks, $parent_pk) {
+  foreach($children_pks as $pk) {
+    $cwrapper = entity_metadata_wrapper('node', $pk);
+    $existing = $cwrapper->og_group_ref->get();
+    if(!in_array($parent_pk, $existing_pks)) {
+      $existing_pks[]=$parent_pk;
+      $cwrapper->og_group_ref->set($existing_pks);
+    }
+  }
+}
+
+function _chem21_quiz_app_lesson_update_help($entity, $data) {
+  $changes = array();
+  
+  $ewrapper = entity_metadata_wrapper('node', $entity, array('bundle'=>'quiz'));
+  if( isset($data['title']) ) {
+    $ewrapper->title = $data['title'];
+  }
+  if( isset($data['body']) ) {
+    $ewrapper->body->set(array('value' => $data['body']));
+  }
+
+  if( isset($data['course']) )  {
+    try {
+      $parent_id = intval($data['course']);
+      $pwrapper = node_load($parent_id);
+      $ewrapper->og_group_ref->set(array($parent_id));  
+    } catch (Exception $e) {
+      return services_error($parent_id." ".$e->getMessage(), 500);
+    }
+  }
+
+  $ewrapper->save();
+  entity_save($entity);
+
+  if (isset($data['question_orders'])) {
+    _chem21_quiz_app_ensure_children_in_parent(array_keys($data['question_orders']), $entity->nid);
+
+    $quiz = new CHEM21Quiz(NULL,$entity->nid, $entity->vid);
+    $changes += $quiz->reorder_questions($data['question_orders']);
+  }
+  return $changes;
+}
+
+function _chem21_quiz_app_course_create($data) {
+  global $user;
+  $values = array(
+    'type' => 'course',
+    'uid' => $user->uid,
+    'status' => 1,
+    'comment' => 0,
+    'promote' => 0,
+  );
+  if(!isset($data['title']) || !$data['title']) {
+    return services_error('Missing question attribute: title', 406);
+  }
+  $entity = entity_create('node', $values);
+  $entity = _chem21_quiz_app_course_update_help($entity, $data);
+  return (object)array(
+      'id' => $entity->nid,
+      'uri' => services_resource_uri(array('course', $entity->nid)),
+    );
+}
+
+function _chem21_quiz_app_course_update($cId,$data) {
+  $entity = entity_load_single('node',$cId);
+  if(empty($entity)) {
+    return services_error("Course not found", 410);
+  }
+  $changes = _chem21_quiz_app_course_update_help($entity, $data);
+  return (object)array(
+    'id' => $entity->nid,
+    'uri' => services_resource_uri(array('course', $entity->nid)),
+    'changes' => $changes
+  );
+}
+
+function _chem21_quiz_app_course_update_help($entity, $data) {
+  $ewrapper = entity_metadata_wrapper('node', $entity, array('bundle'=>'course'));
+  $changes = [];
+  if( isset($data['title']) ) {
+    $ewrapper->title->set($data['title']);
+  }
+  if( isset($data['body']) ) {
+    $ewrapper->body->set(array('value' => $data['body']));
+  }
+  if( isset($data['klass']) ) {
+    try {
+      $parent_id = intval($data['klass']);
+      $pwrapper = node_load($parent_id);
+      $ewrapper->og_group_ref->set(array($parent_id));  
+    } catch (Exception $e) {
+      return services_error($parent_id." ".$e->getMessage(), 500);
+    }
+  }
+  $ewrapper->save();
+  if (isset($data['lesson_orders'])) {
+    $course = new CHEM21Course(NULL,$entity->nid);
+    $changes += $course->reorder_lessons($data['lesson_orders']);
+     _chem21_quiz_app_ensure_children_in_parent(array_keys($data['lesson_orders']), $entity->nid);
+  }
+  return $changes;
+}
+
+
+
+
+/******************* helper functions *******************************/
