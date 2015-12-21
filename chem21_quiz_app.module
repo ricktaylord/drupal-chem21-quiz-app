@@ -498,6 +498,7 @@ function _chem21_quiz_app_get_h5p_content_path($entity) {
 function _chem21_quiz_app_question_retrieve($lId) {
   $question = entity_load_single('node', intval($lId));
   $ewrapper = entity_metadata_wrapper('node', $question);
+
   $question->intro = $ewrapper->body->value()['value'];
   
   return $question;
@@ -521,10 +522,12 @@ function _chem21_quiz_app_question_create($data) {
   }
 
   $entity = _chem21_quiz_app_question_update_help($entity, $data);
-  return (object)array(
+  $out = (object)array(
         'id' => $entity->nid,
         'uri' => services_resource_uri(array('question', $entity->nid)),
       );
+
+
 }
 
 function _chem21_quiz_app_lesson_retrieve($lId) {
@@ -553,10 +556,13 @@ function _chem21_quiz_app_question_update($qId,$data) {
 function _chem21_quiz_app_question_update_help($entity, $data )  {  
   $ewrapper = entity_metadata_wrapper('node', $entity, array('bundle'=>$entity->type));
 
-  if( isset($data['file']) && $data['file']['type']=="video" ) {
+  if( isset($data['h5p_resources']) ) {
     $content_path = _chem21_quiz_app_get_h5p_content_path($entity);
-    $filename_abs=$content_path.$data['file']['filename'];
-    $savedfile=file_save_data(base64_decode($data['file']['data']), $filename_abs);
+    for( $data['h5p_resources'] as $fid=>$rel_path) { 
+      $source = file_load($fid);
+      $dest_path = $content_path+$rel_path
+      $result = file_move($source, $dest_path);
+    }
   }
 
   if(isset($data['intro'] )) {
