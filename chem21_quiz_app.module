@@ -498,6 +498,7 @@ function _chem21_quiz_app_get_h5p_content_path($entity) {
 function _chem21_quiz_app_question_retrieve($lId) {
   $question = entity_load_single('node', intval($lId));
   $ewrapper = entity_metadata_wrapper('node', $question);
+
   $question->intro = $ewrapper->body->value()['value'];
   watchdog("Question retrieve", print_r($question,TRUE));
   if($question->type=="h5p_content") {
@@ -544,10 +545,12 @@ function _chem21_quiz_app_question_create($data) {
   }
 
   $entity = _chem21_quiz_app_question_update_help($entity, $data);
-  return (object)array(
+  $out = (object)array(
         'id' => $entity->nid,
         'uri' => services_resource_uri(array('question', $entity->nid)),
       );
+
+
 }
 
 function _chem21_quiz_app_lesson_retrieve($lId) {
