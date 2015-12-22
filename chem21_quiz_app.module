@@ -491,7 +491,7 @@ function _chem21_quiz_app_h5p_video_path_alter($json_content, $path, $mime) {
 
 
 function _chem21_quiz_app_get_h5p_content_path($entity) {
-  return _h5p_get_h5p_path()."content/".h5p_get_content_id($entity)."/";
+  return _h5p_get_h5p_path()."/content/".h5p_get_content_id($entity)."/";
 }
 
 
@@ -499,6 +499,29 @@ function _chem21_quiz_app_question_retrieve($lId) {
   $question = entity_load_single('node', intval($lId));
   $ewrapper = entity_metadata_wrapper('node', $question);
   $question->intro = $ewrapper->body->value()['value'];
+  watchdog("Question retrieve", print_r($question,TRUE));
+  if($question->type=="h5p_content") {
+    $json_content = json_decode($question->json_content, TRUE); 
+    watchdog("Question retrieve", print_r($json_content,TRUE));
+    if( isset($json_content['interactiveVideo']) ) {
+      $files = $json_content['interactiveVideo']['video']['files'];
+      $resources = array();
+      foreach($files as $fdata) {
+        $uri = _chem21_quiz_app_get_h5p_content_path($question).$fdata['path'];
+        $uri = str_replace("sites/default/files/","public://",$uri);
+        watchdog("Question retrieve", $uri);
+        $query = new EntityFieldQuery();
+        $result = $query->entityCondition('entity_type', 'file')
+          ->propertyCondition('uri', $uri)
+          ->execute();
+        watchdog("Question retrieve", print_r($result,TRUE));
+        $file_object = reset($result['file']);
+        $fid = $file_object->fid;
+        $resources[intval($fid)] = $fdata['path'];
+      }
+      $question->h5p_resources = $resources;
+    }
+  }
   
   return $question;
 }
@@ -553,24 +576,30 @@ function _chem21_quiz_app_question_update($qId,$data) {
 function _chem21_quiz_app_question_update_help($entity, $data )  {  
   $ewrapper = entity_metadata_wrapper('node', $entity, array('bundle'=>$entity->type));
 
-  if( isset($data['file']) && $data['file']['type']=="video" ) {
-    $content_path = _chem21_quiz_app_get_h5p_content_path($entity);
-    $filename_abs=$content_path.$data['file']['filename'];
-    $savedfile=file_save_data(base64_decode($data['file']['data']), $filename_abs);
-  }
-
   if(isset($data['intro'] )) {
     $ewrapper->body->set(array('value' => $data['intro']));
   }
 
   if(isset($data['title'])) {
     $ewrapper->title = $data['title'];
-    
   }
+
+  if(isset($data['h5p_library'])) {
+    $ewrapper->main_library_id = H5PCore::getLibraryId($data['h5p_library']);
+  }
+
   try {
     $ewrapper->save();
   } catch (Exception $e) {
     return services_error($entity->type." ".$e->getMessage(), 500);
+  }
+
+  if(isset($data['h5p_resources'])) {
+    $base_path = _chem21_quiz_app_get_h5p_content_path($entity);
+    foreach($data['h5p_resources'] as $fid=>$path) {
+      $source = file_load($fid);
+      file_move($source, $base_path."/".$path);
+    }
   }
 
   return $entity;
@@ -696,7 +725,7 @@ function _chem21_quiz_app_course_create($data) {
     return services_error('Missing question attribute: title', 406);
   }
   $entity = entity_create('node', $values);
-  $entity = _chem21_quiz_app_course_update_help($entity, $data);
+  $changes = _chem21_quiz_app_course_update_help($entity, $data);
   return (object)array(
       'id' => $entity->nid,
       'uri' => services_resource_uri(array('course', $entity->nid)),
@@ -735,10 +764,11 @@ function _chem21_quiz_app_course_update_help($entity, $data) {
     }
   }
   $ewrapper->save();
+  node_save($entity);
   if (isset($data['lesson_orders'])) {
     $course = new CHEM21Course(NULL,$entity->nid);
-    $changes += $course->reorder_lessons($data['lesson_orders']);
      _chem21_quiz_app_ensure_children_in_parent(array_keys($data['lesson_orders']), $entity->nid);
+    $changes += $course->reorder_lessons($data['lesson_orders']);
   }
   return $changes;
 }
