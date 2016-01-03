@@ -545,6 +545,7 @@ function _chem21_quiz_app_question_create($data) {
   }
 
   $entity = _chem21_quiz_app_question_update_help($entity, $data);
+  return services_error('Done question update');
   $out = (object)array(
         'id' => $entity->nid,
         'uri' => services_resource_uri(array('question', $entity->nid)),
@@ -587,9 +588,17 @@ function _chem21_quiz_app_question_update_help($entity, $data )  {
     $ewrapper->title = $data['title'];
   }
 
+
   if(isset($data['h5p_library'])) {
-    $ewrapper->main_library_id = H5PCore::getLibraryId($data['h5p_library']);
+    $core = _h5p_get_instance('core');
+    $id = $core->getLibraryId(null,$data['h5p_library']);
+    return services_error("Library ID: ".$id." string ".$data['h5p_library']);
+    if($id) {
+      $ewrapper->main_library_id = $id;
+    }
   }
+  
+
 
   try {
     $ewrapper->save();
@@ -604,7 +613,6 @@ function _chem21_quiz_app_question_update_help($entity, $data )  {
       file_move($source, $base_path."/".$path);
     }
   }
-
   return $entity;
 }
 
