@@ -100,7 +100,7 @@ function chem21_quiz_app_question_in_lesson($quiz_node,$question_node) {
 
 function chem21_quiz_app_preprocess_node(&$vars) {
   $node = $vars['node'];
-  watchdog("C21 APp","Preprocessing node");
+  watchdog("C21 app","Preprocessing node");
   if(CHEM21Quiz::is_question_node($node) && !$_POST['op']) {
     $quiz_nids = CHEM21Quiz::get_quizzes_for_question_vid($node->vid);
     if(empty($quiz_nids)) {
@@ -535,30 +535,28 @@ function _chem21_quiz_app_question_create($data) {
     'comment' => 0,
     'promote' => 0,
   );
-  if(isset($data['simple_fields']) && $data['simple_fields']) {
-    $values = array_merge($values, (array)$data['simple_fields']);
+  try {
+    if(isset($data['simple_fields']) && $data['simple_fields']) {
+      $values = array_merge($values, (array)$data['simple_fields']);
+    }
+    $entity = entity_create('node',$values);
+    $entity->uid = $user->uid;
+    if(!isset($data['title']) || !$data['title']) {
+      return services_error('Missing question attribute: title', 406);
+    }
+    $entity = _chem21_quiz_app_question_update_help($entity, $data);
+  } catch(Exception $e) {
+    return services_error("update help error ".$e->getMessage(),406);
   }
-  $entity = entity_create('node',$values);
-  $entity->uid = $user->uid;
-  if(!isset($data['title']) || !$data['title']) {
-    return services_error('Missing question attribute: title', 406);
-  }
-
-  $entity = _chem21_quiz_app_question_update_help($entity, $data);
-  return services_error('Done question update');
   $out = (object)array(
         'id' => $entity->nid,
         'uri' => services_resource_uri(array('question', $entity->nid)),
       );
-
-
+  return $out;
 }
 
 function _chem21_quiz_app_lesson_retrieve($lId) {
   $question = entity_load_single('node', intval($lId));
- # $ewrapper = entity_metadata_wrapper('node', $lesson);
-  #$question->intro = $ewrapper->body->value()['value'];
-  
   return $question;
 }
 
@@ -589,15 +587,23 @@ function _chem21_quiz_app_question_update_help($entity, $data )  {
   }
 
 
+
   if(isset($data['h5p_library'])) {
-    $core = _h5p_get_instance('core');
-    $id = $core->getLibraryId(null,$data['h5p_library']);
-    return services_error("Library ID: ".$id." string ".$data['h5p_library']);
+    $h5p_if = _h5p_get_instance('interface');
+    $libString = $data['h5p_library'];
+    $parts = explode(" ", $libString);
+    $versions = explode(".",$parts[1]);
+    $id = $h5p_if->getLibraryId($parts[0], $versions[0],$versions[1]);
     if($id) {
-      $ewrapper->main_library_id = $id;
+      try {
+        $entity->main_library_id = $id;
+        $entity->disable = 0;
+        entity_save("node", $entity);
+      } catch (Exception $e) {
+        return services_error("Set lib ID ".$e->getMessage(), 500);
+      }
     }
   }
-  
 
 
   try {
@@ -608,9 +614,22 @@ function _chem21_quiz_app_question_update_help($entity, $data )  {
 
   if(isset($data['h5p_resources'])) {
     $base_path = _chem21_quiz_app_get_h5p_content_path($entity);
+    $base_path = str_replace("sites/default/files/","public://",$base_path);
     foreach($data['h5p_resources'] as $fid=>$path) {
-      $source = file_load($fid);
-      file_move($source, $base_path."/".$path);
+      try {
+        $source = file_load($fid);
+        if($source) {
+          $dest = $base_path.$path;
+          $dir = dirname($dest);
+          drupal_mkdir($dir, NULL, TRUE);          
+          $f = file_move($source, $dest);
+          if(!$f) {
+            return services_error("Unable to move file to $dest");
+          }
+        }
+      } catch (Exception $e) {
+        return services_error($e->getMessage(), 500);
+      }
     }
   }
   return $entity;
@@ -647,7 +666,7 @@ function _chem21_quiz_app_lesson_create($data) {
     return services_error('Missing question attribute: title', 400);
   }
   $entity = entity_create('node', $values);
-  $entity = _chem21_quiz_app_lesson_update_help($entity, $data);
+  $changes = _chem21_quiz_app_lesson_update_help($entity, $data);
   return (object)array(
       'id' => $entity->nid,
       'uri' => services_resource_uri(array('lesson', $entity->nid)),
@@ -682,7 +701,7 @@ function _chem21_quiz_app_lesson_reorder_questions($lId, $data) {
 function _chem21_quiz_app_ensure_children_in_parent($children_pks, $parent_pk) {
   foreach($children_pks as $pk) {
     $cwrapper = entity_metadata_wrapper('node', $pk);
-    $existing = $cwrapper->og_group_ref->get();
+    $existing_pks = $cwrapper->og_group_ref->get()->value();
     if(!in_array($parent_pk, $existing_pks)) {
       $existing_pks[]=$parent_pk;
       $cwrapper->og_group_ref->set($existing_pks);
@@ -692,7 +711,7 @@ function _chem21_quiz_app_ensure_children_in_parent($children_pks, $parent_pk) {
 
 function _chem21_quiz_app_lesson_update_help($entity, $data) {
   $changes = array();
-  
+  $entity->og_group_ref |= array();
   $ewrapper = entity_metadata_wrapper('node', $entity, array('bundle'=>'quiz'));
   if( isset($data['title']) ) {
     $ewrapper->title = $data['title'];
@@ -711,14 +730,20 @@ function _chem21_quiz_app_lesson_update_help($entity, $data) {
     }
   }
 
-  $ewrapper->save();
-  entity_save($entity);
+  try {
+    $ewrapper->save();
+  } catch (Exception $e) {
+    return services_error("Saving lesson ".$e->getMessage(), 500);
+  }
 
   if (isset($data['question_orders'])) {
-    _chem21_quiz_app_ensure_children_in_parent(array_keys($data['question_orders']), $entity->nid);
-
-    $quiz = new CHEM21Quiz(NULL,$entity->nid, $entity->vid);
-    $changes += $quiz->reorder_questions($data['question_orders']);
+    try {
+      _chem21_quiz_app_ensure_children_in_parent(array_keys($data['question_orders']), $entity->nid);
+      $quiz = new CHEM21Quiz(NULL,$entity->nid, $entity->vid);
+      $changes += $quiz->reorder_questions($data['question_orders']);
+    } catch (Exception $e) {
+      return services_error("Question order ".$e->getMessage(), 500);
+    }
   }
   return $changes;
 }
@@ -757,8 +782,10 @@ function _chem21_quiz_app_course_update($cId,$data) {
 }
 
 function _chem21_quiz_app_course_update_help($entity, $data) {
+  $entity->og_group_ref |= array();
   $ewrapper = entity_metadata_wrapper('node', $entity, array('bundle'=>'course'));
   $changes = [];
+  $ewrapper->group_access = 0;
   if( isset($data['title']) ) {
     $ewrapper->title->set($data['title']);
   }
@@ -775,11 +802,25 @@ function _chem21_quiz_app_course_update_help($entity, $data) {
     }
   }
   $ewrapper->save();
-  node_save($entity);
+
   if (isset($data['lesson_orders'])) {
+    try {
+      $course = new CHEM21Course(NULL,$entity->nid);
+       #_chem21_quiz_app_ensure_children_in_parent(array_keys($data['lesson_orders']), $entity->nid);
+     $changes += $course->reorder_lessons($data['lesson_orders']);
+         } catch (Exception $e) {
+      return services_error("lesson orders bxcjnx ".$e->getMessage());
+    }
+  }
+
+  if(empty($entity->opigno_course_tools)) {
     $course = new CHEM21Course(NULL,$entity->nid);
-     _chem21_quiz_app_ensure_children_in_parent(array_keys($data['lesson_orders']), $entity->nid);
-    $changes += $course->reorder_lessons($data['lesson_orders']);
+    try {
+      $course->add_tools(array('quiz','tft'));
+    } catch (Exception $e) {
+      return services_error("add tool bxcjnx ".$e->getMessage());
+    }
+    
   }
   return $changes;
 }
