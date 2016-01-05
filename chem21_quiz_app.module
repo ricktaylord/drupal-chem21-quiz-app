@@ -18,7 +18,7 @@ function theme_chem21_quiz_app_quiz_progress($vars) {
   $quiz = $vars['quiz'];
   // TODO Number of parameters in this theme funcion does not match number of parameters found in hook_theme.
   // Determine the percentage finished (not used, but left here for other implementations).
-  //$progress = ($question_number*100)/$num_of_question;
+  // $progress = ($question_number*100)/$num_of_question;
   $output  = '';
   if(node_access('update',$ques)) {
     $output.='<ul class="tabs primary"><li><a href="/node/'.$ques->nid.'/edit">Edit</a></li></ul>';
@@ -579,7 +579,7 @@ function _chem21_quiz_app_question_update_help($entity, $data )  {
   $ewrapper = entity_metadata_wrapper('node', $entity, array('bundle'=>$entity->type));
 
   if(isset($data['intro'] )) {
-    $ewrapper->body->set(array('value' => $data['intro']));
+    $ewrapper->body->set(array('value' => $data['intro'], 'format'=>'html'));
   }
 
   if(isset($data['title'])) {
@@ -624,7 +624,7 @@ function _chem21_quiz_app_question_update_help($entity, $data )  {
           drupal_mkdir($dir, NULL, TRUE);          
           $f = file_move($source, $dest);
           if(!$f) {
-            return services_error("Unable to move file to $dest");
+            #return services_error("Unable to move file to $dest");
           }
         }
       } catch (Exception $e) {
@@ -698,13 +698,23 @@ function _chem21_quiz_app_lesson_reorder_questions($lId, $data) {
   );
 }
 
-function _chem21_quiz_app_ensure_children_in_parent($children_pks, $parent_pk) {
+function _chem21_quiz_app_ensure_children_in_parent($children_pks, $parent_pk, $bundle=NULL) {
   foreach($children_pks as $pk) {
-    $cwrapper = entity_metadata_wrapper('node', $pk);
+    $entity = entity_load_single("node",$pk);
+    if(is_null($bundle)) {
+      $this_bundle = $entity->type;
+    } else {
+      $this_bundle = $bundle;
+    }
+    $cwrapper = entity_metadata_wrapper('node', $entity, array('bundle'=>$this_bundle) );
     $existing_pks = $cwrapper->og_group_ref->get()->value();
     if(!in_array($parent_pk, $existing_pks)) {
       $existing_pks[]=$parent_pk;
       $cwrapper->og_group_ref->set($existing_pks);
+    }
+    try {
+      $cwrapper->save(TRUE);
+    } catch (Exception $e) {
     }
   }
 }
@@ -717,7 +727,7 @@ function _chem21_quiz_app_lesson_update_help($entity, $data) {
     $ewrapper->title = $data['title'];
   }
   if( isset($data['body']) ) {
-    $ewrapper->body->set(array('value' => $data['body']));
+    $ewrapper->body->set(array('value' => $data['body'], 'format'=>'html'));
   }
 
   if( isset($data['course']) )  {
@@ -738,11 +748,15 @@ function _chem21_quiz_app_lesson_update_help($entity, $data) {
 
   if (isset($data['question_orders'])) {
     try {
-      _chem21_quiz_app_ensure_children_in_parent(array_keys($data['question_orders']), $entity->nid);
-      $quiz = new CHEM21Quiz(NULL,$entity->nid, $entity->vid);
+    _chem21_quiz_app_ensure_children_in_parent(array_keys($data['question_orders']), $entity->nid);
+  } catch (Exception $e) {
+      return services_error("Question added to lesson ".$e->getMessage(), 500);
+    }
+    $quiz = new CHEM21Quiz(NULL,$entity->nid, $entity->vid);
+    try {
       $changes += $quiz->reorder_questions($data['question_orders']);
     } catch (Exception $e) {
-      return services_error("Question order ".$e->getMessage(), 500);
+      return services_error("Question reorder ".$e->getMessage(), 500);
     }
   }
   return $changes;
@@ -789,8 +803,8 @@ function _chem21_quiz_app_course_update_help($entity, $data) {
   if( isset($data['title']) ) {
     $ewrapper->title->set($data['title']);
   }
-  if( isset($data['body']) ) {
-    $ewrapper->body->set(array('value' => $data['body']));
+  if( isset($data['intro']) ) {
+    $ewrapper->body->set(array('value' => $data['body'], 'format'=>'html'));
   }
   if( isset($data['klass']) ) {
     try {
@@ -806,8 +820,8 @@ function _chem21_quiz_app_course_update_help($entity, $data) {
   if (isset($data['lesson_orders'])) {
     try {
       $course = new CHEM21Course(NULL,$entity->nid);
-       #_chem21_quiz_app_ensure_children_in_parent(array_keys($data['lesson_orders']), $entity->nid);
-     $changes += $course->reorder_lessons($data['lesson_orders']);
+       _chem21_quiz_app_ensure_children_in_parent(array_keys($data['lesson_orders']), $entity->nid, "quiz");
+        $changes += $course->reorder_lessons($data['lesson_orders']);
          } catch (Exception $e) {
       return services_error("lesson orders bxcjnx ".$e->getMessage());
     }

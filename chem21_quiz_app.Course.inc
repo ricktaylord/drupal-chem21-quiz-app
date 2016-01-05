@@ -40,7 +40,6 @@ class CHEM21Course {
 
     foreach($tools as $i=>$tool) {
       $record = array('entity_type'=>'node','bundle'=>'course','language'=>'und','entity_id'=>$this->nid,'revision_id'=>$this->node()->vid,'delta'=>$i,'opigno_course_tools_tool'=>$tool);
-      #return services_error(print_r($record));
       try {
         $query1->values($record);
       } catch (Exception $e) {
